@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  cliente:
+    build: .
+    container_name: cliente
+    # Poderes de administrador de rede para o Raw Socket funcionar!
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./cliente:/app
+    networks:
+      rede_streaming:
+        ipv4_address: 10.0.2.2
+
+  servidor:
+    build: .
+    container_name: servidor
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./servidor:/app
+    networks:
+      rede_streaming:
+        ipv4_address: 10.0.1.2
+
+  roteador:
+    build: .
+    container_name: roteador
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./roteador:/app
+    networks:
+      rede_streaming:
+        ipv4_address: 10.0.3.2
+
+networks:
+  rede_streaming:
+    driver: bridge
+    ipam:
+      config:
+        # Uma rede grande o suficiente para englobar os IPs do cliente e servidor
+        - subnet: 10.0.0.0/16
