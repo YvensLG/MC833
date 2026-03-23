@@ -4,7 +4,6 @@ services:
   cliente:
     build: .
     container_name: cliente
-    # Poderes de administrador de rede para o Raw Socket funcionar!
     cap_add:
       - NET_ADMIN
     volumes:
@@ -40,5 +39,4 @@ networks:
     driver: bridge
     ipam:
       config:
-        # Uma rede grande o suficiente para englobar os IPs do cliente e servidor
         - subnet: 10.0.0.0/16

@@ -1,0 +1,137 @@
+\documentclass[12pt]{article}
+\usepackage[brazil]{babel}    
+\usepackage[utf8]{inputenc} 
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+
+\usepackage[top=2cm,left=2cm,right=2cm,bottom=2cm]{geometry}
+
+\lstset{
+    backgroundcolor=\color{white},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    captionpos=b,
+    commentstyle=\color{gray},
+    keywordstyle=\color{blue},
+    stringstyle=\color{red},
+}
+
+\title{MC833 - Relatório Trabalho 01\\
+Fase 1: Streaming de Vídeo Cliente-Servidor com Sockets Raw}
+\author{Yvens Ian Prado Porto - RA 184031}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Introdução}
+Este relatório descreve o desenvolvimento da primeira fase do Trabalho 01 da disciplina MC833. O objetivo principal foi implementar uma aplicação de streaming de vídeo no modelo Cliente-Servidor utilizando \textit{Raw Sockets} na linguagem Python. Ao contornar a pilha de protocolos padrão do sistema operacional, foi necessário realizar a construção manual e o encapsulamento de todos os cabeçalhos das camadas de Rede e Transporte (IP e UDP), além da implementação do protocolo de aplicação RTP para a transmissão contínua do vídeo.
+
+\section{Protocolo e Diagrama de Sequência}
+A aplicação utiliza o protocolo {UDP} na camada de transporte, em conjunto com o protocolo {RTP} na camada de aplicação. 
+
+A escolha do {UDP} justifica-se pela natureza do streaming de vídeo em tempo real, onde a entrega rápida dos dados é mais importante do que a confiabilidade absoluta. O TCP introduziria atrasos inaceitáveis (\textit{head-of-line blocking}) devido às retransmissões automáticas de pacotes perdidos. No entanto, como o UDP não garante ordem nem sincronização, o {RTP} foi escolhido para encapsular o vídeo. O cabeçalho RTP preenche essas lacunas ao prover um \textit{Sequence Number} (permitindo ao cliente reordenar pacotes ou detectar perdas) e um \textit{Timestamp} (essencial para a reprodução do vídeo na velocidade correta e cálculo de \textit{jitter}).
+
+Abaixo, o Diagrama de Sequência ilustrando a comunicação:
+
+\begin{center}
+    \begin{verbatim}
+        CLIENTE                                               SERVIDOR
+        |                                                     |
+        | ------- (UDP) "catalog" --------------------------> |
+        |                                                     | (Lê diretório)
+        | <------ (UDP) Lista de Vídeos (.ts) --------------- |
+        |                                                     |
+        | ------- (UDP) "stream video.ts" ------------------> |
+        |                                                     | (Abre arquivo)
+        | <------ (UDP) "[Servidor] Preparando..." ---------- |
+        | <------ (UDP + RTP) Chunk 1 do Vídeo -------------- |
+        | <------ (UDP + RTP) Chunk 2 do Vídeo -------------- |
+        |                       ...                           |
+        | <------ (UDP + RTP) Chunk N do Vídeo -------------- |
+        | <------ (UDP) "[Servidor] EOF" -------------------- |
+        |                                                     |
+    \end{verbatim}
+\end{center}
+
+\section{Estrutura dos Cabeçalhos e Alocação de Bytes}
+Para cada pacote de vídeo transmitido, a aplicação monta a seguinte estrutura de cabeçalhos (\textit{headers}) antes do envio na rede. O tamanho total de cabeçalhos por pacote é de {40 bytes}.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}llp{8cm}@{}}
+\toprule
+{Protocolo} & {Tamanho} & {Campos Reservados} \\ \midrule
+{IPv4}      & 20 bytes         & Version, IHL, TOS, Total Length, ID, Flags, Fragment Offset, TTL, Protocol (17), Header Checksum, Source IP, Dest IP. \\
+{UDP}       & 8 bytes          & Source Port, Destination Port, Length, Checksum. \\
+{RTP}       & 12 bytes         & Version, Padding, Extension, CSRC Count, Marker, Payload Type (33), Sequence Number, Timestamp, SSRC. \\ \bottomrule
+\end{tabular}
+\caption{Estrutura dos cabeçalhos construídos via struct do Python.}
+\end{table}
+
+\subsection{Bytes Reservados para Dados (Payload)}
+A quantidade de bytes reservada exclusivamente para os dados (o vídeo em si) em cada pacote é de {1316 bytes}. Esse valor foi escolhido com base na arquitetura do \textit{MPEG Transport Stream} (.ts), onde cada pacote TS possui exatos 188 bytes. O valor de 1316 bytes permite encapsular de forma perfeitamente alinhada $7$ pacotes TS por \textit{datagrama} UDP ($188 \times 7 = 1316$), evitando fragmentação desnecessária no nível de aplicação.
+
+\section{Análise de Desempenho e Taxa de Transmissão}
+Para calcular a quantidade de pacotes por \textit{frame} e a taxa de transmissão exigida pela rede, adotamos a premissa de que os vídeos operam a uma taxa de {30 frames por segundo (fps)}.
+
+\subsection{Metodologia de Cálculo}
+\begin{enumerate}
+    \item {Total de Frames:} $\text{Duração (s)} \times 30\text{ fps}$.
+    \item {Bytes por Frame ($S_f$):} $\text{Tamanho do Arquivo (em bytes)} / \text{Total de Frames}$.
+    \item {Pacotes por Frame ($P$):} $\lceil S_f / 1316\text{ bytes} \rceil$ (arredondado para o próximo inteiro).
+    \item {Taxa de Transmissão ($T$):} Sabendo que o tamanho total de um pacote na rede (Dados + IP + UDP + RTP) é de {1356 bytes}, a taxa em bits por segundo (bps) é: $T = P \times 1356 \times 8 \times 30$.
+\end{enumerate}
+
+Para fins de precisão na conversão de armazenamento, utilizou-se $1\text{ MB} = 1.048.576\text{ bytes}$. A seguir, os resultados para os três vídeos testados no catálogo.
+
+\subsection{Vídeo 1: edu.ts}
+{Especificações:} Tamanho: 7.2 MB ($7.549.747\text{ bytes}$) | Duração: 14 s | Total de Frames: 420.
+\begin{itemize}
+    \item {Tamanho médio por frame:} $\approx 17.975\text{ bytes}$.
+    \item {Quantidade de pacotes por frame:} $14\text{ pacotes}$.
+    \item {Taxa de transmissão requerida (30fps):} $\approx 4.55\text{ Mbps}$ ($4.556.160\text{ bps}$).
+\end{itemize}
+
+\subsection{Vídeo 2: golden.ts}
+{Especificações:} Tamanho: 165.1 MB ($173.119.897\text{ bytes}$) | Duração: 198 s | Total de Frames: 5940.
+\begin{itemize}
+    \item {Tamanho médio por frame:} $\approx 29.144\text{ bytes}$.
+    \item {Quantidade de pacotes por frame:} $23\text{ pacotes}$.
+    \item {Taxa de transmissão requerida (30fps):} $\approx 7.48\text{ Mbps}$ ($7.485.120\text{ bps}$).
+\end{itemize}
+
+\subsection{Vídeo 3: sioiosikis.ts}
+{Especificações:} Tamanho: 78.3 MB ($82.103.500\text{ bytes}$) | Duração: 58 s | Total de Frames: 1740.
+\begin{itemize}
+    \item {Tamanho médio por frame:} $\approx 47.185\text{ bytes}$.
+    \item {Quantidade de pacotes por frame:} $36\text{ pacotes}$.
+    \item {Taxa de transmissão requerida (30fps):} $\approx 11.71\text{ Mbps}$ ($11.715.840\text{ bps}$).
+\end{itemize}
+
+\section{Resultados Finais}
+O ambiente foi validado com êxito. A escolha pelo \textit{Transport Stream} foi motivada pela sua arquitetura, que diferentemente de arquivos \texttt{.mp4}, permite a leitura e reprodução contínua e sequencial sem a dependência de um índice central (\textit{moov atom}).
+
+O sistema provou sua integridade tanto de forma passiva (verificando a semelhança absoluta de \textit{hashs} MD5 entre o arquivo origem no contêiner do Servidor e o recebido no contêiner do Cliente) quanto ativamente: foi possível iniciar um \textit{player} de vídeo apontado para o arquivo em construção na máquina \textit{host} e assistir à transmissão em tempo real simultânea ao seu processamento na rede. O sistema de tratamento de exceções do \textit{Servidor} atuou corretamente em requisições de vídeos inexistentes, evitando o travamento do \textit{Cliente}.
+
+\section{Declaração de Uso de Inteligência Artificial}
+Em conformidade com as diretrizes da disciplina, declaro que ferramentas de Inteligência Artificial Generativa foram utilizadas durante o desenvolvimento deste trabalho como assistentes de tutoria e \textit{pair-programming}.
+
+\textbf{Justificativa e Detalhamento de Uso:}
+\begin{itemize}
+    \item \textbf{Empacotamento de Bits:} Auxílio na compreensão das máscaras de bits (\textit{bitwise operations}) e nos formatos da biblioteca \texttt{struct} do Python para a montagem exata dos cabeçalhos RTP, UDP e IPv4.
+    \item \textbf{Depuração de Redes (\textit{Debugging}):} Suporte na identificação do comportamento de \textit{Hanging Client} (cliente travado aguardando resposta) e na lógica de extração dos 14 bytes iniciais do \textit{frame Ethernet} da camada de enlace ao utilizar o \textit{socket} \texttt{AF\_PACKET}.
+    \item \textbf{Estruturação Matemática e \LaTeX:} Auxílio na formatação do relatório técnico e na montagem das equações para o cálculo formal da taxa de transmissão de rede (\textit{throughput}) e pacotes por \textit{frame}.
+\end{itemize}
+
+Ressalto que toda a arquitetura base, execução no ambiente Docker, testes de conceito, validação de integridade via \textit{hashes} MD5 e a reprodução real do fluxo de vídeo foram conduzidos, executados e interpretados de forma autoral na minha máquina local.
+
+\end{document}

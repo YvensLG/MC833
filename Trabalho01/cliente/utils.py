@@ -31,9 +31,12 @@ def calculate_checksum(msg: bytes) -> int:
     s = s + (s >> 16)
     return (~s) & 0xffff
 
-def build_udp_packet(src_ip: str, dest_ip: str, src_port: int, dest_port: int, data: str) -> bytes:
+def build_udp_packet(src_ip: str, dest_ip: str, src_port: int, dest_port: int, data) -> bytes:
     """Constrói um pacote IP/UDP completo do zero."""
-    data_bytes = data.encode('utf-8')
+    if isinstance(data, bytes):
+        data_bytes = data
+    else:
+        data_bytes = data.encode('utf-8')
     
     # Header UDP
     udp_length = 8 + len(data_bytes)
@@ -61,3 +64,18 @@ def build_udp_packet(src_ip: str, dest_ip: str, src_port: int, dest_port: int, d
     ip_header_final = struct.pack(IP_FORMAT, ihl_version, tos, tot_len, id_ip, frag_off, ttl, protocol, ip_checksum, src_ip_bytes, dest_ip_bytes)
     
     return ip_header_final + udp_header_final + data_bytes
+
+def build_rtp_header(seq_num, timestamp, ssrc=12345):
+    """Constrói um cabeçalho RTP de 12 bytes."""
+    version = 2
+    padding = 0
+    extension = 0
+    cc = 0
+    marker = 0
+    payload_type = 33  # 33 é o padrão para MPEG2-TS (.ts)
+    
+    first_byte = (version << 6) | (padding << 5) | (extension << 4) | cc
+    second_byte = (marker << 7) | payload_type
+    
+    # ! = network order, B = 1 byte, H = 2 bytes, I = 4 bytes
+    return struct.pack('!BBHII', first_byte, second_byte, seq_num, timestamp, ssrc)

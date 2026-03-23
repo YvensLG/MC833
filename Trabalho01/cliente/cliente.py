@@ -35,6 +35,9 @@ def start_client():
             msg = input("\nVocê (Cliente) > ")
             if msg == 'q': break
 
+            is_streaming = msg.startswith('stream ')
+            nome_video = msg[7:].strip() if is_streaming else ""
+
             # Você deve usar sua implementação de build_udp_packet aqui
             packet = build_udp_packet(
                 src_ip="10.0.2.2", 
@@ -47,34 +50,69 @@ def start_client():
             sender.sendto(packet, (dest_ip, 0))
             print("[-] Pacote enviado. Aguardando resposta do servidor...")
 
+            # Variáveis de controle para o download
+            arquivo_destino = f"download_{nome_video}"
+            f = None
+            download_sucesso = False
+
             # --- TAREFA: FILTRAGEM E UNPACK ---
-            while True:
-                # Captura o pacote bruto da rede
-                raw_packet, _ = sniffer.recvfrom(65535)
+            try:
+                while True:
+                    # Captura o pacote bruto da rede
+                    raw_packet, _ = sniffer.recvfrom(65535)
+                    ip_packet = raw_packet[14:]
 
-                # 1. Verificar se o pacote tem o tamanho mínimo (IP + UDP = 28 bytes)
-                if len(raw_packet) < 28: 
-                    continue
+                    # 1. Verificar se o pacote tem o tamanho mínimo (IP + UDP = 28 bytes)
+                    if len(ip_packet) < 28: 
+                        continue
 
-                # 2. Extrair o Header IP usando unpack_iph()
-                iph = unpack_iph(raw_packet)
-                
-                # 3. Validar se o protocolo no Header IP é UDP (17)
-                protocolo = iph[6]
-                if protocolo != 17:
-                    continue
-                
-                # 4. Extrair o Header UDP usando unpack_udp()
-                udph = unpack_udp(raw_packet)
-                
-                # 5. Validar se a porta de destino (Dest Port) é a REC_PORT do cliente
-                porta_destino = udph[1]
-                if porta_destino == REC_PORT:
+                    # 2. Extrair o Header IP usando unpack_iph()
+                    iph = unpack_iph(ip_packet)
+                    
+                    # 3. Validar se o protocolo no Header IP é UDP (17)
+                    if iph[6] != 17:
+                        continue
+                    
+                    # 4. Extrair o Header UDP usando unpack_udp()
+                    udph = unpack_udp(ip_packet)
+
+                    # 5. Validar se a porta de destino (Dest Port) é a REC_PORT do cliente
+                    if udph[1] != REC_PORT: continue
                     
                     # 6. Extrair os dados usando unpack_data()
-                    data = unpack_data(raw_packet)
-                    print(f'> Server response: {data.decode("utf-8", errors="ignore")}')
-                    break 
+                    data = unpack_data(ip_packet)
+
+                    # Como saber se é texto do servidor ou se é byte de vídeo?
+                    if data.startswith(b"[Servidor]") or data.startswith(b"[Erro]") or data.startswith(b"Cat"):
+                        texto = data.decode("utf-8", errors="ignore")
+                        print(f'> Server: {texto}')
+
+                        if not is_streaming:
+                            break
+                            
+                        if "[Erro]" in texto:
+                            break
+                            
+                        if "Preparando stream" in texto:
+                            f = open(arquivo_destino, "wb")
+                            print(f"[*] Criando arquivo '{arquivo_destino}' no disco...")
+                            
+                        if "EOF" in texto:
+                            download_sucesso = True
+                            break
+                    
+                    else:
+                        if is_streaming and f is not None:
+                            if len(data) > 12:
+                                chunk_video = data[12:]
+                                f.write(chunk_video)
+
+            finally:
+                if f is not None and not f.closed:
+                    f.close()
+                
+                if download_sucesso:
+                    print(f"[+] Download do vídeo '{nome_video}' concluído com sucesso!\n")
 
     except KeyboardInterrupt:
         print("\n[!] Encerrando cliente...")
