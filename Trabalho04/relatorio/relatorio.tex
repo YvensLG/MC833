@@ -1,0 +1,102 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{logo-ic-unicamp}
+\usepackage{logo-unicamp}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+
+\usepackage{geometry}
+\geometry{
+  left=2.5cm,
+  right=2.5cm,
+  top=2.5cm,
+  bottom=2.5cm
+}
+
+\begin{document}
+
+% --- START OF UNIQUE HEADER ---
+\thispagestyle{empty} 
+\noindent
+{
+\fontfamily{phv}\selectfont 
+\fontsize{11pt}{13.2pt}\selectfont 
+\begin{minipage}[c]{0.15\textwidth}
+    \centering
+    \LogoUnicamp 
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.65\textwidth}
+    \centering
+    \textbf{Relatório de desenvolvimento das atividades}\\[0.2cm]
+    \textit{Instituto de Computação - Universidade Estadual de Campinas\\Allan M. de Souza, Rafael O. Jarczewski}
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.15\textwidth}
+    \centering
+    \LogoIcUnicamp 
+\end{minipage}
+
+\vspace{1cm}
+}
+% --- END OF UNIQUE HEADER ---
+
+\noindent\textbf{Nome:} Yvens Ian Prado Porto\\
+\textbf{RA:} 184031
+
+\section{Introdução}
+Este relatório detalha a configuração e proteção de uma arquitetura de rede corporativa simulada em ambiente Docker. O desafio exigiu a implementação de conceitos avançados de redes, incluindo planejamento de sub-redes (Subnetting) utilizando uma Classe C, roteamento estático entre múltiplos polos e gerência, tradução de endereços (NAT) para acesso à internet, e a aplicação de rigorosas políticas de segurança (Firewall Stateful) utilizando \texttt{iptables}.
+
+\section{Planejamento de Endereçamento (Subnetting)}
+O requisito principal exigia a utilização de uma rede de Classe C dividida em exatamente 4 sub-redes. Foi adotada a rede base \texttt{192.168.10.0/24}. 
+
+Para criar 4 sub-redes, foram emprestados 2 bits do octeto de hosts ($2^2 = 4$), resultando em uma nova máscara de sub-rede \texttt{/26} (ou \texttt{255.255.255.192}). Isso proporcionou 64 endereços por sub-rede (62 utilizáveis para hosts). A distribuição ficou definida da seguinte forma:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Nome da Rede} & \textbf{Endereço de Rede} & \textbf{Range Utilizável} & \textbf{Broadcast} \\ \midrule
+Serviço (Matriz) & \texttt{192.168.10.0/26} & \texttt{.1} até \texttt{.62} & \texttt{.63} \\
+Polo 1 & \texttt{192.168.10.64/26} & \texttt{.65} até \texttt{.126} & \texttt{.127} \\
+Polo 2 & \texttt{192.168.10.128/26} & \texttt{.129} até \texttt{.190} & \texttt{.191} \\
+Gerência & \texttt{192.168.10.192/26} & \texttt{.193} até \texttt{.254} & \texttt{.255} \\ \bottomrule
+\end{tabular}
+\caption{Planejamento de sub-redes /26 a partir da rede Classe C base.}
+\end{table}
+
+A rede de Internet foi mantida com o endereçamento original fornecido no laboratório (\texttt{203.0.113.0/24}).
+
+\section{Roteamento Estático e NAT}
+Para garantir a conectividade, os roteadores de borda dos Polos (\texttt{R2\_BR1} e \texttt{R3\_BR2}) e da Internet (\texttt{R4\_EDGE}) foram configurados com uma Rota Padrão (\textit{Default Gateway}) apontando para o Roteador Principal (\texttt{R1\_HQ}). O Roteador Principal, por sua vez, recebeu rotas estáticas específicas apontando de volta para as redes de cada Polo.
+
+Para o acesso à Internet pública, configurou-se o Mascaramento (NAT) no roteador \texttt{R4\_EDGE} utilizando a regra \texttt{POSTROUTING} com \textit{MASQUERADE}. Isso permitiu que os pacotes da rede privada fossem traduzidos para o IP público \texttt{203.0.113.1} ao saírem para a Internet.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{print1.png}
+    \caption{Provas de conectividade básica: Polo 1 alcançando o DNS interno e Polo 2 alcançando a Internet pública via NAT com 0\% de perda de pacotes.}
+\end{figure}
+
+\section{Políticas de Segurança e Isolamento (Firewall)}
+Para atender aos requisitos de segurança e segmentação corporativa, regras de \texttt{iptables} foram aplicadas majoritariamente no roteador central (\texttt{R1\_HQ}), atuando na \textit{chain} de \texttt{FORWARD}:
+
+\begin{itemize}
+    \item \textbf{Isolamento de Polos e Gerência:} Foram criadas regras de \texttt{DROP} bidirecionais impedindo qualquer tráfego cruzado entre o Polo 1, Polo 2 e a rede de Gerência.
+    \item \textbf{Proteção do Banco de Dados:} O IP do \texttt{srv\_db} (\texttt{192.168.10.12}) foi isolado. Foi identificada uma peculiaridade topológica onde os roteadores dos polos possuíam interfaces diretamente na rede de Serviço, criando um "atalho" que bypassava o roteador central. Para sanar isso, aplicou-se o \texttt{DROP} para o DB também nas interfaces de saída do \texttt{R2\_BR1} e \texttt{R3\_BR2}.
+    \item \textbf{Stateful Firewall (Borda):} No \texttt{R4\_EDGE}, o acesso entrante da Internet para a rede interna foi bloqueado, exceto para pacotes pertencentes a conexões previamente iniciadas internamente (estado \textit{ESTABLISHED} e \textit{RELATED}).
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.9\textwidth]{print2.png}
+    \caption{Teste de Firewall: Pings bloqueados (100\% de perda) comprovando o isolamento entre Polos, Gerência, Banco de Dados e a proteção contra acesso externo.}
+\end{figure}
+
+\section{Declaração de Uso de Inteligência Artificial}
+Em conformidade com as diretrizes da disciplina, declaro que ferramentas de Inteligência Artificial Generativa foram utilizadas durante o desenvolvimento deste trabalho como assistentes de tutoria técnica. 
+
+O uso limitou-se à verificação matemática da divisão de sub-redes (Subnetting /26), na formulação sintática dos comandos de \texttt{iptables} para garantir o bloqueio stateful de pacotes originados da Internet, e na estruturação lógica do roteamento para evitar rotas conflitantes (\textit{File exists}) no sistema do Docker. A execução, implementação nos contêineres virtuais e validação das rotas foram conduzidas de forma autoral no ambiente local.
+
+\end{document}
